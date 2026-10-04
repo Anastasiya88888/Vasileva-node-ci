@@ -12,46 +12,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Generate Docker image tags
+        id: tag
+        run: |
+          echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "BRANCH_TAG=$(echo ${GITHUB_REF##*/})" >> $GITHUB_ENV
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
         with:
-          node-version: '20'
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Run build
-        run: npm run build
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
         with:
-          name: dist-build
-          path: dist/
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/nodeapp:${{ env.IMAGE_TAG }}
+            ${{ secrets.DOCKER_USERNAME }}/nodeapp:latest
 
       - name: Decode SSH key
         run: |
           echo "${{ secrets.EC2_SSH_KEY_B64 }}" | base64 -d > ec2-key.pem
           chmod 600 ec2-key.pem
 
-      - name: Copy files to server
+      - name: Deploy on server
         run: |
-          rsync -avz \
-            -e "ssh -i ec2-key.pem -p ${{ secrets.EC2_PORT }} -o StrictHostKeyChecking=no" \
-            ./ \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/nodeapp
-
-      - name: Run app on server
-        run: |
-          ssh -i ec2-key.pem -p ${{ secrets.EC2_PORT }} -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
-          if ! command -v node &> /dev/null; then
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-            sudo apt-get install -y nodejs
-          fi
-          if ! command -v pm2 &> /dev/null; then
-            sudo npm install -g pm2
-          fi
-          cd nodeapp
-          npm install
-          pm2 restart all || pm2 start index.js --name nodeapp
+          ssh -i ec2-key.pem -p ${{ secrets.EC2_PORT }} -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
+          sudo docker ps --filter "publish=3000" --format "{{.ID}}" | xargs -r sudo docker stop
+          sudo docker rm -f nodeapp || true
+          sudo docker pull ${{ secrets.DOCKER_USERNAME }}/nodeapp:${{ env.IMAGE_TAG }}
+          sudo docker run -d --name nodeapp -p 3000:3000 ${{ secrets.DOCKER_USERNAME }}/nodeapp:${{ env.IMAGE_TAG }}
           EOF
