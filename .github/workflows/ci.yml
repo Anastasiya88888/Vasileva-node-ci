@@ -55,18 +55,17 @@ jobs:
           echo "${{ secrets.EC2_SSH_KEY_B64 }}" | base64 -d > ec2-key.pem
           chmod 600 ec2-key.pem
 
-      - name: Copy docker-compose.yml to server
+      - name: Copy Terraform files to server
         run: |
           rsync -avz \
             -e "ssh -i ec2-key.pem -p ${{ secrets.EC2_PORT }} -o StrictHostKeyChecking=no" \
-            docker-compose.yml \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/nodeapp/docker-compose.yml
+            terraform/ \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/nodeapp/terraform/
 
-      - name: Deploy on server
+      - name: Deploy via Terraform on server
         run: |
           ssh -i ec2-key.pem -p ${{ secrets.EC2_PORT }} -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
-          cd nodeapp
-          sudo docker pull ${{ secrets.DOCKER_USERNAME }}/nodeapp:${{ env.IMAGE_TAG }}
-          sudo docker compose down || true
-          sudo DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }} IMAGE_TAG=${{ env.IMAGE_TAG }} docker compose up -d
+          cd nodeapp/terraform
+          terraform init -input=false
+          terraform apply -auto-approve -var="docker_image=${{ secrets.DOCKER_USERNAME }}/nodeapp:${{ env.IMAGE_TAG }}"
           EOF
